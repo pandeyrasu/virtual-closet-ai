@@ -4,6 +4,7 @@ import {
   isAllowedUrl,
   type ScrapedProduct,
 } from "@/lib/scrape-shared";
+import { uniqloColorFamily, uniqloColorFromHtml } from "@/lib/uniqlo";
 
 export const runtime = "nodejs";
 
@@ -365,6 +366,16 @@ export async function GET(req: NextRequest) {
     color = color ?? ld?.color ?? meta.get("product:color")?.[0] ?? null;
     material = material ?? ld?.material ?? findComposition(html);
     siteName = meta.get("og:site_name")?.[0] ?? null;
+  }
+
+  // Uniqlo declares the selected color in the URL (?colorDisplayCode=NN);
+  // the page's embedded JSON state has its display name.
+  if (!color && /(^|\.)uniqlo\.com$/.test(url.hostname)) {
+    const cc = url.searchParams.get("colorDisplayCode");
+    if (cc) {
+      color =
+        (html && uniqloColorFromHtml(html, cc)) || uniqloColorFamily(cc);
+    }
   }
 
   if (images.length === 0) {

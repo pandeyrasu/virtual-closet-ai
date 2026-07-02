@@ -24,6 +24,17 @@ const NAMED_COLORS: Array<{ name: string; rgb: [number, number, number] }> = [
   { name: "brown", rgb: [120, 80, 50] },
   { name: "beige", rgb: [215, 200, 170] },
   { name: "cream", rgb: [245, 238, 220] },
+  // alias shades: extra reference points that map to the same names, so
+  // pale/dark garments land on the right family (keep after the canonical
+  // entries — colorFromText picks the first entry per name)
+  { name: "blue", rgb: [190, 210, 235] }, // pale blue
+  { name: "blue", rgb: [95, 130, 180] }, // denim
+  { name: "pink", rgb: [242, 215, 220] }, // pale pink
+  { name: "green", rgb: [40, 75, 50] }, // dark green
+  { name: "grey", rgb: [75, 75, 80] }, // charcoal
+  { name: "grey", rgb: [200, 200, 202] }, // light grey
+  { name: "purple", rgb: [205, 195, 230] }, // lilac
+  { name: "yellow", rgb: [245, 230, 160] }, // pale yellow
 ];
 
 export const NEUTRAL_COLOR_NAMES = new Set([
