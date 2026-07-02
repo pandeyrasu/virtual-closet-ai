@@ -144,6 +144,24 @@ export function UploadItems({ onSaved }: { onSaved: () => void }) {
     };
   }, []);
 
+  // Paste support: Ctrl/Cmd+V an image copied from anywhere (screenshot,
+  // right-click "Copy image" on a shop page, ...) to add it to the closet.
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const files = [...(e.clipboardData?.items ?? [])]
+        .filter((item) => item.type.startsWith("image/"))
+        .map((item) => item.getAsFile())
+        .filter((f): f is File => Boolean(f));
+      if (files.length > 0) {
+        e.preventDefault();
+        addFiles(files.map((file) => ({ file })));
+      }
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const update = (tempId: string, patch: Partial<PendingItem>) =>
     setPendings((ps) =>
       ps.map((p) => (p.tempId === tempId ? { ...p, ...patch } : p))
@@ -272,8 +290,9 @@ export function UploadItems({ onSaved }: { onSaved: () => void }) {
         <span className="text-3xl">📷</span>
         <p className="font-medium">Add clothes</p>
         <p className="max-w-sm text-sm text-ink/60">
-          Drop product photos or your own pictures here. The AI categorizes
-          them automatically — right on your device, for free.
+          Drop product photos or your own pictures here — or paste a copied
+          image (Ctrl/Cmd+V). The AI categorizes them automatically, right on
+          your device, for free.
         </p>
         {modelStatus === "loading" && (
           <p className="text-xs text-clay">

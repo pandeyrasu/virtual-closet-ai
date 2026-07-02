@@ -72,6 +72,22 @@ export default function TryonPage() {
     void refresh();
   }, [refresh]);
 
+  // Paste support: Ctrl/Cmd+V a copied photo to start a new try-on entry.
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const file = [...(e.clipboardData?.items ?? [])]
+        .filter((item) => item.type.startsWith("image/"))
+        .map((item) => item.getAsFile())
+        .find((f): f is File => Boolean(f));
+      if (file) {
+        e.preventDefault();
+        setDraftFile((prev) => prev ?? file);
+      }
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, []);
+
   function toggleDraftItem(id: string) {
     setDraftItemIds((prev) => {
       const next = new Set(prev);
@@ -121,7 +137,8 @@ export default function TryonPage() {
           <span className="text-3xl">🪞</span>
           <p className="font-medium">Add a photo of yourself</p>
           <p className="text-sm text-ink/60">
-            Wearing any combination of your closet items
+            Wearing any combination of your closet items — click, drop, or
+            paste (Ctrl/Cmd+V)
           </p>
           <input
             ref={inputRef}
