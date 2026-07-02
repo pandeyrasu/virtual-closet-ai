@@ -110,10 +110,83 @@ export function nearestColorName(hex: string): string {
   return best.name;
 }
 
+/**
+ * Extract dominant colors with node-vibrant (open-source MMCQ palette
+ * extraction) on a background-masked copy of the image: we sample the
+ * corners for the studio-background color, make those pixels transparent,
+ * and let Vibrant quantize what's left — i.e. the garment. Falls back to a
+ * simple histogram if Vibrant can't produce a palette.
+ */
 export async function extractDominantColors(
   blob: Blob,
   count = 3
 ): Promise<string[]> {
+  try {
+    const src = await maskBackgroundToDataUrl(blob);
+    const { Vibrant } = await import("node-vibrant/browser");
+    const palette = await Vibrant.from(src).getPalette();
+    const swatches = Object.values(palette)
+      .filter((s): s is NonNullable<typeof s> => Boolean(s))
+      .sort((a, b) => b.population - a.population);
+    if (swatches.length > 0) {
+      return swatches.slice(0, count).map((s) => s.hex);
+    }
+  } catch {
+    // fall through to histogram
+  }
+  return histogramColors(blob, count);
+}
+
+/**
+ * Downscale the image and turn background-like pixels (matching the corner
+ * colors) transparent. Returns a data URL; if masking would remove nearly
+ * everything (garment matches the background), returns the unmasked image.
+ */
+async function maskBackgroundToDataUrl(blob: Blob): Promise<string> {
+  const bitmap = await createImageBitmap(blob);
+  const size = 256;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("no 2d context");
+  ctx.drawImage(bitmap, 0, 0, size, size);
+  bitmap.close();
+
+  const img = ctx.getImageData(0, 0, size, size);
+  const d = img.data;
+  const corner = (x: number, y: number) => {
+    const i = (y * size + x) * 4;
+    return [d[i], d[i + 1], d[i + 2], d[i + 3]] as const;
+  };
+  const corners = [
+    corner(4, 4),
+    corner(size - 5, 4),
+    corner(4, size - 5),
+    corner(size - 5, size - 5),
+  ];
+  let kept = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    if (d[i + 3] < 128) continue;
+    const isBg = corners.some(([cr, cg, cb, ca]) => {
+      if (ca < 128) return false;
+      return (
+        (d[i] - cr) ** 2 + (d[i + 1] - cg) ** 2 + (d[i + 2] - cb) ** 2 < 900
+      );
+    });
+    if (isBg) d[i + 3] = 0;
+    else kept++;
+  }
+  if (kept < size * size * 0.05) {
+    // garment ~= background; use the original image instead
+    return canvas.toDataURL();
+  }
+  ctx.putImageData(img, 0, 0);
+  return canvas.toDataURL();
+}
+
+/** Previous coarse-histogram extraction, kept as a dependency-free fallback. */
+async function histogramColors(blob: Blob, count = 3): Promise<string[]> {
   const bitmap = await createImageBitmap(blob);
   const size = 64;
   const canvas = document.createElement("canvas");
