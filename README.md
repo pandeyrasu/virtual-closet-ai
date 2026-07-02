@@ -11,6 +11,7 @@ Built to cost **$0 to run**: no paid APIs, no API keys, no server-side storage.
 | Feature | How | Cost |
 |---|---|---|
 | Clothing categorization | [CLIP](https://huggingface.co/Xenova/clip-vit-base-patch32) zero-shot image classification via [Transformers.js](https://github.com/xenova/transformers.js), running **in your browser** | Free (model downloads once, ~90 MB, then cached) |
+| Product link import | Tiny Next.js API routes scrape JSON-LD/OpenGraph metadata + proxy images (no CORS issues); Uniqlo adapter derives image-CDN URLs from the product code | Free (runs on Vercel's free serverless tier) |
 | Color detection | Canvas-based dominant-color extraction | Free (no deps) |
 | Weather | [Open-Meteo](https://open-meteo.com/) forecast + geocoding APIs | Free, no API key |
 | Trends | Hand-curated seasonal trend heuristics (`lib/trends.ts`) | Free (edit to taste) |
@@ -35,10 +36,14 @@ Open http://localhost:3000.
 ## Using the app
 
 1. **Closet tab** — drop in photos of your clothes (shop product images or
-   your own pictures). The on-device AI proposes a category/subcategory with a
-   confidence score and detects dominant colors; review, correct if needed,
-   and save. Filter your inventory by category, mark favorites, track wear
-   counts.
+   your own pictures), **or paste a product link** (e.g. a Uniqlo product
+   page): the app extracts the product name and photos from the page, you
+   pick the image you want, and it flows into the same AI review step with
+   the product title prefilled. The on-device AI proposes a
+   category/subcategory with a confidence score and detects dominant colors;
+   review, correct if needed, and save. If the AI model can't load (offline),
+   you can still categorize manually. Filter your inventory by category, mark
+   favorites, track wear counts.
 2. **Today tab** — set your city (or allow location access) to pull today's
    forecast. Pick an occasion (casual / work / sport / party) and get three
    scored outfit suggestions with the reasons spelled out: warmth matched to
@@ -60,8 +65,11 @@ app/
   closet/page.tsx   # inventory + AI upload flow
   tryon/page.tsx    # try-on photo gallery + tagging
   outfits/page.tsx  # saved outfits
-components/         # NavBar, ItemCard, UploadItems, OutfitCard
+  api/scrape/       # product-page metadata extraction (JSON-LD/OG + adapters)
+  api/image/        # CORS-free image proxy for shop CDNs
+components/         # NavBar, ItemCard, UploadItems, ProductLinkImport, OutfitCard
 lib/
+  scrape-shared.ts  # scrape types + URL allowlist guard
   types.ts          # data model
   db.ts             # IndexedDB persistence (idb)
   taxonomy.ts       # subcategory vocabulary + warmth/season/occasion metadata
@@ -73,8 +81,11 @@ lib/
   tryon.ts          # outfit ↔ try-on photo matching
 ```
 
-Everything runs client-side; there are no API routes and no environment
-variables. Your wardrobe data lives in your browser's IndexedDB.
+All wardrobe data lives client-side in your browser's IndexedDB. The only
+server code is the two stateless scrape/proxy routes for product-link
+imports (needed because shop pages and CDNs block cross-origin browser
+requests). No environment variables are required; set `ALLOW_LOCAL_SCRAPE=1`
+only when testing the scraper against localhost fixtures.
 
 ## Notes & future ideas
 

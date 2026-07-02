@@ -13,10 +13,13 @@ import { newId, saveItem } from "@/lib/db";
 import { TAXONOMY, subcategoryInfo } from "@/lib/taxonomy";
 import type { ClothingItem } from "@/lib/types";
 import { useBlobUrl } from "@/lib/useBlobUrl";
+import { ProductLinkImport } from "./ProductLinkImport";
 
 interface PendingItem {
   tempId: string;
   file: File;
+  /** product title from a link import; overrides the auto-generated name */
+  nameOverride?: string | null;
   status: "queued" | "classifying" | "review" | "saved" | "error";
   draft?: ClothingItem;
   error?: string;
@@ -59,6 +62,9 @@ function DraftRow({
         )}
         {pending.status === "review" && draft && (
           <div className="flex flex-col gap-2">
+            {pending.error && (
+              <p className="text-xs text-clay">{pending.error}</p>
+            )}
             <div className="flex flex-wrap items-center gap-2">
               <input
                 className="input flex-1"
@@ -131,48 +137,70 @@ export function UploadItems({ onSaved }: { onSaved: () => void }) {
     processing.current = true;
     for (const p of queue) {
       update(p.tempId, { status: "classifying" });
+      let colors = ["#888888"];
       try {
-        const [result, colors] = await Promise.all([
-          classifyClothing(p.file),
-          extractDominantColors(p.file),
-        ]);
-        const colorName = nearestColorName(colors[0]);
-        const draft: ClothingItem = {
-          id: newId(),
-          name: `${colorName} ${result.info.label}`,
-          category: result.info.category,
-          subcategory: result.info.label,
-          colors,
-          colorName,
-          warmth: result.info.warmth,
-          seasons: result.info.seasons,
-          occasions: result.info.occasions,
-          confidence: result.confidence,
-          image: p.file,
-          favorite: false,
-          wearCount: 0,
-          lastWorn: null,
-          createdAt: Date.now(),
-        };
-        update(p.tempId, { status: "review", draft });
-      } catch (e) {
-        update(p.tempId, {
-          status: "error",
-          error:
-            "Couldn't analyze this image. Check your connection (the free AI model downloads once from Hugging Face) and try again.",
-        });
+        colors = await extractDominantColors(p.file);
+      } catch {
+        // keep fallback color
       }
+      const colorName = nearestColorName(colors[0]);
+      let info = TAXONOMY[0];
+      let confidence = 0;
+      let aiFailed = false;
+      try {
+        const result = await classifyClothing(p.file);
+        info = result.info;
+        confidence = result.confidence;
+      } catch {
+        // Model unavailable (offline / download blocked): fall back to a
+        // manual draft so the item can still be categorized by hand.
+        aiFailed = true;
+      }
+      const draft: ClothingItem = {
+        id: newId(),
+        name: p.nameOverride?.trim() || `${colorName} ${info.label}`,
+        category: info.category,
+        subcategory: info.label,
+        colors,
+        colorName,
+        warmth: info.warmth,
+        seasons: info.seasons,
+        occasions: info.occasions,
+        confidence,
+        image: p.file,
+        favorite: false,
+        wearCount: 0,
+        lastWorn: null,
+        createdAt: Date.now(),
+      };
+      update(p.tempId, {
+        status: "review",
+        draft,
+        error: aiFailed
+          ? "AI is unavailable right now — please set the category manually."
+          : undefined,
+      });
     }
     processing.current = false;
   }
 
-  function handleFiles(files: FileList | null) {
-    if (!files || files.length === 0) return;
-    const queue: PendingItem[] = [...files]
-      .filter((f) => f.type.startsWith("image/"))
-      .map((file) => ({ tempId: newId(), file, status: "queued" as const }));
+  function addFiles(entries: Array<{ file: File; nameOverride?: string | null }>) {
+    const queue: PendingItem[] = entries
+      .filter((e) => e.file.type.startsWith("image/"))
+      .map((e) => ({
+        tempId: newId(),
+        file: e.file,
+        nameOverride: e.nameOverride,
+        status: "queued" as const,
+      }));
+    if (queue.length === 0) return;
     setPendings((ps) => [...queue, ...ps]);
     void processQueue(queue);
+  }
+
+  function handleFiles(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    addFiles([...files].map((file) => ({ file })));
   }
 
   async function handleSave(p: PendingItem) {
@@ -216,6 +244,11 @@ export function UploadItems({ onSaved }: { onSaved: () => void }) {
           }}
         />
       </div>
+      <ProductLinkImport
+        onPick={(file, suggestedName) =>
+          addFiles([{ file, nameOverride: suggestedName }])
+        }
+      />
       {pendings.map((p) => (
         <DraftRow
           key={p.tempId}
