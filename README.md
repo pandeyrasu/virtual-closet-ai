@@ -11,7 +11,7 @@ Built to cost **$0 to run**: no paid APIs, no API keys, no server-side storage.
 | Feature | How | Cost |
 |---|---|---|
 | Clothing categorization | [CLIP](https://huggingface.co/Xenova/clip-vit-base-patch32) zero-shot image classification via [Transformers.js](https://github.com/xenova/transformers.js), running **in your browser** | Free (model downloads once, ~90 MB, then cached) |
-| Product link import | Tiny Next.js API routes extract the product's name, color, fabric composition and images: Shopify stores via their public `/products/{handle}.json`, everything else via JSON-LD/OpenGraph + composition-pattern scraping; a Uniqlo adapter derives image-CDN URLs from the product code. An image proxy avoids CORS issues | Free (runs on Vercel's free serverless tier) |
+| Product link import | Tiny Next.js API routes extract the product's name, color, fabric composition and images: Shopify stores via their public `/products/{handle}.json`, everything else via JSON-LD/OpenGraph + composition-pattern scraping; Uniqlo and Next (next.co.uk) adapters derive image-CDN URLs straight from the product code. Bot-blocked or client-rendered pages are retried through the free `r.jina.ai` reader. An image proxy avoids CORS issues | Free (runs on Vercel's free serverless tier) |
 | Color detection | Canvas-based dominant-color extraction | Free (no deps) |
 | Weather | [Open-Meteo](https://open-meteo.com/) forecast + geocoding APIs | Free, no API key |
 | Trends | Hand-curated seasonal trend heuristics (`lib/trends.ts`) | Free (edit to taste) |
@@ -87,7 +87,8 @@ All wardrobe data lives client-side in your browser's IndexedDB. The only
 server code is the two stateless scrape/proxy routes for product-link
 imports (needed because shop pages and CDNs block cross-origin browser
 requests). No environment variables are required; set `ALLOW_LOCAL_SCRAPE=1`
-only when testing the scraper against localhost fixtures.
+only when testing the scraper against localhost fixtures, and
+`READER_PREFIX` to stub the bot-block fallback reader in tests.
 
 ## Notes & future ideas
 

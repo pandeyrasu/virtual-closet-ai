@@ -5,8 +5,16 @@ import {
   type ScrapedProduct,
 } from "@/lib/scrape-shared";
 import { uniqloColorFamily, uniqloColorFromHtml } from "@/lib/uniqlo";
+import {
+  fetchViaReader,
+  looksLikeHtml,
+  markdownImages,
+  markdownTitle,
+} from "@/lib/reader";
 
 export const runtime = "nodejs";
+// the reader fallback can take a while on JS-heavy shop pages
+export const maxDuration = 60;
 
 const IMAGE_EXT = /\.(jpe?g|png|webp|avif)(\?|$)/i;
 const NOISE = /(logo|icon|sprite|favicon|placeholder|badge|banner|1x1|pixel)/i;
@@ -296,6 +304,33 @@ async function tryShopify(url: URL): Promise<ShopifyResult | null> {
   }
 }
 
+/**
+ * Next (next.co.uk) adapter: the site is bot-protected and client-rendered,
+ * but its image CDN is open and URLs derive from the item number, e.g.
+ * https://www.next.co.uk/style/st699888/720068 -> item 720068. We emit
+ * several candidate patterns; the client keeps only the ones that load.
+ */
+function nextCoUkCandidates(url: URL): string[] {
+  if (!/(^|\.)next\.(co\.uk|com|ie)$/.test(url.hostname)) return [];
+  const m =
+    url.pathname.match(/\/style\/st\d+\/([a-z0-9]{6})/i) ??
+    url.pathname.match(/\/g\d+\/([a-z0-9]{6})/i) ??
+    url.pathname.match(/\b([a-z]?\d{6})(?:[/?#]|$)/i);
+  if (!m) return [];
+  const item = m[1].toLowerCase();
+  const base =
+    "https://xcdn.next.co.uk/common/items/default/default/itemimages";
+  const out: string[] = [];
+  for (const dir of ["3_4Ratio/product/lge", "altitemzoom", "search/lge"]) {
+    out.push(`${base}/${dir}/${item}s.jpg`);
+    out.push(`${base}/${dir}/${item}.jpg`);
+  }
+  for (let i = 1; i <= 4; i++) {
+    out.push(`${base}/altitemshot/${item}s${i}.jpg`);
+  }
+  return out;
+}
+
 export async function GET(req: NextRequest) {
   const raw = req.nextUrl.searchParams.get("url") ?? "";
   if (!isAllowedUrl(raw)) {
@@ -340,6 +375,7 @@ export async function GET(req: NextRequest) {
   // Site adapters go first: they work even when the HTML is bot-blocked.
   shopify?.images.forEach(push);
   uniqloCandidates(url).forEach(push);
+  nextCoUkCandidates(url).forEach(push);
 
   let title: string | null = shopify?.title ?? null;
   let brand: string | null = shopify?.brand ?? null;
@@ -347,40 +383,65 @@ export async function GET(req: NextRequest) {
   let material: string | null = shopify?.material ?? null;
   let siteName: string | null = null;
 
-  if (html) {
-    const ld = parseJsonLd(html);
-    const meta = parseMeta(html);
+  /** Extract metadata + images from page HTML; returns images found. */
+  const absorbHtml = (pageHtml: string): number => {
+    const before = images.length;
+    const ld = parseJsonLd(pageHtml);
+    const meta = parseMeta(pageHtml);
     ld?.images.forEach(push);
     meta.get("og:image")?.forEach(push);
     meta.get("og:image:secure_url")?.forEach(push);
     meta.get("twitter:image")?.forEach(push);
-    parseImgTags(html, url).slice(0, 20).forEach(push);
+    parseImgTags(pageHtml, url).slice(0, 20).forEach(push);
 
     title =
       title ??
       ld?.name ??
       meta.get("og:title")?.[0] ??
-      decodeEntities(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.trim() ?? "") ??
+      decodeEntities(
+        pageHtml.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.trim() ?? ""
+      ) ??
       null;
     brand = brand ?? ld?.brand ?? null;
     color = color ?? ld?.color ?? meta.get("product:color")?.[0] ?? null;
-    material = material ?? ld?.material ?? findComposition(html);
-    siteName = meta.get("og:site_name")?.[0] ?? null;
+    material = material ?? ld?.material ?? findComposition(pageHtml);
+    siteName = siteName ?? meta.get("og:site_name")?.[0] ?? null;
+    if (!color && /(^|\.)uniqlo\.com$/.test(url.hostname)) {
+      const cc = url.searchParams.get("colorDisplayCode");
+      if (cc) color = uniqloColorFromHtml(pageHtml, cc);
+    }
+    return images.length - before;
+  };
+
+  let pageImages = 0;
+  if (html) pageImages = absorbHtml(html);
+
+  // Bot-blocked or client-rendered page: retry through the free reader
+  // service, which renders the page in a real browser.
+  if (!html || (!title && pageImages === 0)) {
+    const content = await fetchViaReader(raw);
+    if (content) {
+      if (looksLikeHtml(content)) {
+        absorbHtml(content);
+      } else {
+        title = title ?? markdownTitle(content);
+        markdownImages(content).forEach(push);
+        material = material ?? findComposition(content);
+      }
+    }
   }
 
-  // Uniqlo declares the selected color in the URL (?colorDisplayCode=NN);
-  // the page's embedded JSON state has its display name.
+  // Uniqlo fallback: map the URL's color code to its color family.
   if (!color && /(^|\.)uniqlo\.com$/.test(url.hostname)) {
     const cc = url.searchParams.get("colorDisplayCode");
-    if (cc) {
-      color =
-        (html && uniqloColorFromHtml(html, cc)) || uniqloColorFamily(cc);
-    }
+    if (cc) color = uniqloColorFamily(cc);
   }
 
   if (images.length === 0) {
     return NextResponse.json(
-      { error: fetchError ?? "No product images found on that page" },
+      {
+        error: `${fetchError ?? "No product images found on that page"}. This shop may block imports — save the product image to your device and upload it above instead.`,
+      },
       { status: 422 }
     );
   }
