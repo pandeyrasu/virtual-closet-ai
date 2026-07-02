@@ -11,7 +11,7 @@ Built to cost **$0 to run**: no paid APIs, no API keys, no server-side storage.
 | Feature | How | Cost |
 |---|---|---|
 | Clothing categorization | [CLIP](https://huggingface.co/Xenova/clip-vit-base-patch32) zero-shot image classification via [Transformers.js](https://github.com/xenova/transformers.js), running **in your browser** | Free (model downloads once, ~90 MB, then cached) |
-| Product link import | Tiny Next.js API routes scrape JSON-LD/OpenGraph metadata + proxy images (no CORS issues); Uniqlo adapter derives image-CDN URLs from the product code | Free (runs on Vercel's free serverless tier) |
+| Product link import | Tiny Next.js API routes extract the product's name, color, fabric composition and images: Shopify stores via their public `/products/{handle}.json`, everything else via JSON-LD/OpenGraph + composition-pattern scraping; a Uniqlo adapter derives image-CDN URLs from the product code. An image proxy avoids CORS issues | Free (runs on Vercel's free serverless tier) |
 | Color detection | Canvas-based dominant-color extraction | Free (no deps) |
 | Weather | [Open-Meteo](https://open-meteo.com/) forecast + geocoding APIs | Free, no API key |
 | Trends | Hand-curated seasonal trend heuristics (`lib/trends.ts`) | Free (edit to taste) |
@@ -37,13 +37,15 @@ Open http://localhost:3000.
 
 1. **Closet tab** — drop in photos of your clothes (shop product images or
    your own pictures), **or paste a product link** (e.g. a Uniqlo product
-   page): the app extracts the product name and photos from the page, you
-   pick the image you want, and it flows into the same AI review step with
-   the product title prefilled. The on-device AI proposes a
-   category/subcategory with a confidence score and detects dominant colors;
-   review, correct if needed, and save. If the AI model can't load (offline),
-   you can still categorize manually. Filter your inventory by category, mark
-   favorites, track wear counts.
+   page): the app extracts the product name, declared color, fabric
+   composition and photos, you pick the image you want, and it flows into
+   the review step prefilled. Shop metadata takes priority — the category
+   comes from the product title ("Sleeveless T-Shirt" → tank top) and the
+   color from the shop's own color field — falling back to the on-device AI
+   image classifier and pixel color detection for plain photo uploads.
+   Review, correct if needed, and save. If the AI model can't load
+   (offline), you can still categorize manually. Filter your inventory by
+   category, mark favorites, track wear counts.
 2. **Today tab** — set your city (or allow location access) to pull today's
    forecast. Pick an occasion (casual / work / sport / party) and get three
    scored outfit suggestions with the reasons spelled out: warmth matched to

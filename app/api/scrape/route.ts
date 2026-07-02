@@ -211,6 +211,90 @@ function uniqloCandidates(url: URL): string[] {
   return out;
 }
 
+/** Extra headers that make the document fetch look like a real navigation. */
+const DOC_HEADERS = {
+  ...BROWSER_HEADERS,
+  "sec-fetch-dest": "document",
+  "sec-fetch-mode": "navigate",
+  "sec-fetch-site": "none",
+  "upgrade-insecure-requests": "1",
+};
+
+interface ShopifyResult {
+  title: string;
+  brand: string | null;
+  color: string | null;
+  material: string | null;
+  images: string[];
+}
+
+/**
+ * Shopify adapter: stores on Shopify expose structured product JSON at
+ * {origin}/products/{handle}.json — cleaner than scraping and usually not
+ * bot-blocked. Returns null for non-Shopify shops (the endpoint 404s or
+ * isn't JSON).
+ */
+async function tryShopify(url: URL): Promise<ShopifyResult | null> {
+  const m = url.pathname.match(/\/products\/([a-z0-9-]+)/i);
+  if (!m) return null;
+  try {
+    const res = await fetch(`${url.origin}/products/${m[1]}.json`, {
+      headers: BROWSER_HEADERS,
+      redirect: "follow",
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok || !(res.headers.get("content-type") ?? "").includes("json")) {
+      return null;
+    }
+    const data = await res.json();
+    const p = data?.product;
+    if (!p || typeof p.title !== "string") return null;
+
+    const images: string[] = Array.isArray(p.images)
+      ? p.images
+          .map((i: unknown) =>
+            i && typeof i === "object" ? (i as { src?: unknown }).src : null
+          )
+          .filter((s: unknown): s is string => typeof s === "string")
+      : [];
+
+    // Color lives in the variant options; honor ?variant=<id> when present.
+    let color: string | null = null;
+    const options: Array<{ name?: string; values?: string[] }> = Array.isArray(
+      p.options
+    )
+      ? p.options
+      : [];
+    const colorIdx = options.findIndex((o) => /colou?r/i.test(o?.name ?? ""));
+    if (colorIdx >= 0) {
+      const variantId = url.searchParams.get("variant");
+      const variants: Array<Record<string, unknown>> = Array.isArray(p.variants)
+        ? p.variants
+        : [];
+      const variant = variantId
+        ? variants.find((v) => String(v?.id) === variantId)
+        : variants[0];
+      const fromVariant = variant?.[`option${colorIdx + 1}`];
+      color =
+        (typeof fromVariant === "string" ? fromVariant : null) ??
+        options[colorIdx]?.values?.[0] ??
+        null;
+    }
+
+    const material =
+      typeof p.body_html === "string" ? findComposition(p.body_html) : null;
+    return {
+      title: p.title,
+      brand: typeof p.vendor === "string" ? p.vendor : null,
+      color,
+      material,
+      images,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function GET(req: NextRequest) {
   const raw = req.nextUrl.searchParams.get("url") ?? "";
   if (!isAllowedUrl(raw)) {
@@ -218,11 +302,13 @@ export async function GET(req: NextRequest) {
   }
   const url = new URL(raw);
 
+  const shopify = await tryShopify(url);
+
   let html = "";
   let fetchError: string | null = null;
   try {
     const res = await fetch(raw, {
-      headers: BROWSER_HEADERS,
+      headers: DOC_HEADERS,
       redirect: "follow",
       signal: AbortSignal.timeout(15000),
     });
@@ -251,12 +337,13 @@ export async function GET(req: NextRequest) {
   };
 
   // Site adapters go first: they work even when the HTML is bot-blocked.
+  shopify?.images.forEach(push);
   uniqloCandidates(url).forEach(push);
 
-  let title: string | null = null;
-  let brand: string | null = null;
-  let color: string | null = null;
-  let material: string | null = null;
+  let title: string | null = shopify?.title ?? null;
+  let brand: string | null = shopify?.brand ?? null;
+  let color: string | null = shopify?.color ?? null;
+  let material: string | null = shopify?.material ?? null;
   let siteName: string | null = null;
 
   if (html) {
@@ -269,13 +356,14 @@ export async function GET(req: NextRequest) {
     parseImgTags(html, url).slice(0, 20).forEach(push);
 
     title =
+      title ??
       ld?.name ??
       meta.get("og:title")?.[0] ??
       decodeEntities(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.trim() ?? "") ??
       null;
-    brand = ld?.brand ?? null;
-    color = ld?.color ?? meta.get("product:color")?.[0] ?? null;
-    material = ld?.material ?? findComposition(html);
+    brand = brand ?? ld?.brand ?? null;
+    color = color ?? ld?.color ?? meta.get("product:color")?.[0] ?? null;
+    material = material ?? ld?.material ?? findComposition(html);
     siteName = meta.get("og:site_name")?.[0] ?? null;
   }
 
