@@ -77,6 +77,72 @@ export function subcategoryInfo(label: string): SubcategoryInfo | undefined {
   return TAXONOMY.find((t) => t.label === label);
 }
 
+/**
+ * Keyword rules for deriving the subcategory from a product title
+ * (e.g. "Womens Pleated Sleeveless T-Shirt" -> tank top). Shop titles are
+ * far more reliable than image classification, so a hit here wins over
+ * the CLIP guess. Order matters: more specific patterns come first.
+ */
+const TEXT_RULES: Array<{ pattern: RegExp; label: string }> = [
+  { pattern: /dress shirt|button[- ]?(up|down)|oxford shirt/, label: "button-up shirt" },
+  { pattern: /shirt dress|t[- ]?shirt dress/, label: "summer dress" },
+  { pattern: /sleeveless|tank|camisole|\bcami\b|vest top/, label: "tank top" },
+  { pattern: /polo/, label: "polo shirt" },
+  { pattern: /t[- ]?shirt|\btee\b/, label: "t-shirt" },
+  { pattern: /blouse/, label: "blouse" },
+  { pattern: /crop top|cropped top/, label: "crop top" },
+  { pattern: /hoodie/, label: "hoodie" },
+  { pattern: /sweatshirt|crew ?neck sweat/, label: "sweatshirt" },
+  { pattern: /cardigan/, label: "cardigan" },
+  { pattern: /sweater|jumper|pullover|knitted top|knit top/, label: "sweater" },
+  { pattern: /long[- ]sleeve/, label: "long sleeve top" },
+  { pattern: /\bshirt\b/, label: "button-up shirt" },
+  { pattern: /jeans|denim pants/, label: "jeans" },
+  { pattern: /shorts/, label: "shorts" },
+  { pattern: /leggings|tights/, label: "leggings" },
+  { pattern: /sweatpants|joggers|track pants/, label: "sweatpants" },
+  { pattern: /trousers|chinos|slacks|\bpants\b/, label: "trousers" },
+  { pattern: /skirt/, label: "skirt" },
+  { pattern: /jumpsuit|playsuit|romper|overall/, label: "jumpsuit" },
+  { pattern: /knit dress|sweater dress/, label: "knit dress" },
+  { pattern: /evening dress|gown|cocktail dress/, label: "evening dress" },
+  { pattern: /dress/, label: "summer dress" },
+  { pattern: /denim jacket/, label: "denim jacket" },
+  { pattern: /leather jacket|biker jacket/, label: "leather jacket" },
+  { pattern: /blazer|suit jacket/, label: "blazer" },
+  { pattern: /puffer|down jacket|padded jacket|quilted jacket/, label: "puffer jacket" },
+  { pattern: /trench/, label: "trench coat" },
+  { pattern: /raincoat|rain jacket|anorak/, label: "raincoat" },
+  { pattern: /parka|winter coat|wool coat|overcoat|\bcoat\b/, label: "winter coat" },
+  { pattern: /jacket/, label: "denim jacket" },
+  { pattern: /sneakers?|trainers?|running shoes/, label: "sneakers" },
+  { pattern: /chelsea boots|ankle boots/, label: "ankle boots" },
+  { pattern: /snow boots|winter boots|\bboots?\b/, label: "winter boots" },
+  { pattern: /heels|pumps|stiletto/, label: "high heels" },
+  { pattern: /sandals?|slides|flip[- ]?flops/, label: "sandals" },
+  { pattern: /loafers?|moccasin/, label: "loafers" },
+  { pattern: /ballet flats|ballerinas|\bflats\b/, label: "ballet flats" },
+  { pattern: /backpack|rucksack/, label: "backpack" },
+  { pattern: /tote/, label: "tote bag" },
+  { pattern: /handbag|shoulder bag|crossbody|\bbag\b|purse/, label: "handbag" },
+  { pattern: /scarf|shawl/, label: "scarf" },
+  { pattern: /beanie/, label: "beanie hat" },
+  { pattern: /baseball cap|\bcap\b/, label: "baseball cap" },
+  { pattern: /sun hat|bucket hat|straw hat|\bhat\b/, label: "sun hat" },
+  { pattern: /belt/, label: "belt" },
+  { pattern: /sunglasses/, label: "sunglasses" },
+  { pattern: /necklace|pendant|choker/, label: "necklace" },
+];
+
+/** Derive a subcategory from free text (product title); null if no rule hits. */
+export function matchTaxonomyFromText(text: string): SubcategoryInfo | null {
+  const t = text.toLowerCase();
+  for (const rule of TEXT_RULES) {
+    if (rule.pattern.test(t)) return subcategoryInfo(rule.label) ?? null;
+  }
+  return null;
+}
+
 export function subcategoriesFor(category: Category): SubcategoryInfo[] {
   return TAXONOMY.filter((t) => t.category === category);
 }

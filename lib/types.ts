@@ -28,6 +28,8 @@ export interface ClothingItem {
   occasions: Occasion[];
   /** how confident the auto-classifier was (0..1); 0 = user set manually */
   confidence: number;
+  /** fabric composition from the shop page, e.g. "100% cotton" */
+  material: string | null;
   image: Blob;
   favorite: boolean;
   wearCount: number;

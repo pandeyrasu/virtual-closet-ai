@@ -38,7 +38,69 @@ function parseMeta(html: string): Map<string, string[]> {
 interface LdProduct {
   name?: string;
   brand?: string;
+  color?: string;
+  material?: string;
   images: string[];
+}
+
+const KNOWN_FIBERS =
+  /(cotton|polyester|wool|linen|nylon|elastane|spandex|viscose|rayon|acrylic|cashmere|silk|lyocell|modal|polyamide|leather|down|hemp|tencel|polyurethane)/i;
+
+/**
+ * Find a fabric composition like "100% Cotton" or
+ * "65% Polyester, 35% Cotton" in the page text. Parses individual
+ * "NN% Fiber" components and groups adjacent ones, so surrounding prose
+ * ("Machine wash at 30°C") doesn't leak into the result.
+ */
+function findComposition(html: string): string | null {
+  // strip tags/scripts so we match visible-ish text
+  const text = html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ");
+
+  interface Part {
+    start: number;
+    end: number;
+    text: string;
+    known: boolean;
+  }
+  const parts: Part[] = [];
+  const partRe = /(\d{1,3})\s*%\s*([A-Za-z][A-Za-z-]*)(?:[ \t]([A-Za-z][A-Za-z-]*))?/g;
+  for (const m of text.matchAll(partRe)) {
+    const [, pct, first, second] = m;
+    // Two-word fibers ("Merino Wool", "Recycled Polyester") keep the second
+    // word only when it's the known fiber; otherwise it's trailing prose.
+    let fiber = first;
+    if (second && !KNOWN_FIBERS.test(first) && KNOWN_FIBERS.test(second)) {
+      fiber = `${first} ${second}`;
+    }
+    parts.push({
+      start: m.index,
+      end: m.index + m[0].indexOf(fiber.split(" ").pop()!) + fiber.split(" ").pop()!.length,
+      text: `${pct}% ${fiber}`,
+      known: KNOWN_FIBERS.test(fiber),
+    });
+  }
+
+  // Group components separated only by ",", "/", "&", "+" or "and".
+  let best: Part[] = [];
+  let group: Part[] = [];
+  for (const p of parts) {
+    const prev = group[group.length - 1];
+    const gap = prev ? text.slice(prev.end, p.start) : "";
+    if (prev && !/^\s*(?:[,/&+·]|and)?\s*$/.test(gap)) group = [];
+    group = [...group, p];
+    if (
+      group.some((g) => g.known) &&
+      (group.length > best.length ||
+        (group.length === best.length &&
+          group.filter((g) => g.known).length > best.filter((g) => g.known).length))
+    ) {
+      best = group;
+    }
+  }
+  return best.length ? best.map((p) => p.text).join(", ") : null;
 }
 
 /** Extract Product data from JSON-LD blocks (handles arrays and @graph). */
@@ -87,9 +149,18 @@ function parseJsonLd(html: string): LdProduct | null {
         : brandRaw && typeof brandRaw === "object"
           ? String((brandRaw as Record<string, unknown>).name ?? "") || undefined
           : undefined;
+    const colorRaw = obj.color;
+    const color =
+      typeof colorRaw === "string"
+        ? colorRaw
+        : Array.isArray(colorRaw) && typeof colorRaw[0] === "string"
+          ? colorRaw[0]
+          : undefined;
     return {
       name: typeof obj.name === "string" ? obj.name : undefined,
       brand,
+      color,
+      material: typeof obj.material === "string" ? obj.material : undefined,
       images,
     };
   }
@@ -184,6 +255,8 @@ export async function GET(req: NextRequest) {
 
   let title: string | null = null;
   let brand: string | null = null;
+  let color: string | null = null;
+  let material: string | null = null;
   let siteName: string | null = null;
 
   if (html) {
@@ -201,6 +274,8 @@ export async function GET(req: NextRequest) {
       decodeEntities(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.trim() ?? "") ??
       null;
     brand = ld?.brand ?? null;
+    color = ld?.color ?? meta.get("product:color")?.[0] ?? null;
+    material = ld?.material ?? findComposition(html);
     siteName = meta.get("og:site_name")?.[0] ?? null;
   }
 
@@ -214,6 +289,8 @@ export async function GET(req: NextRequest) {
   const result: ScrapedProduct = {
     title: title || null,
     brand,
+    color,
+    material,
     siteName: siteName ?? url.hostname.replace(/^www\./, ""),
     images: images.slice(0, 24),
   };

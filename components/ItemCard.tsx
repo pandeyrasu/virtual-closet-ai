@@ -47,6 +47,9 @@ export function ItemCard({
           ))}
           <span className="text-xs text-ink/50">{item.subcategory}</span>
         </div>
+        {item.material && (
+          <p className="mt-0.5 truncate text-xs text-ink/40">{item.material}</p>
+        )}
         {footer}
       </div>
     </div>

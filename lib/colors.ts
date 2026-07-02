@@ -42,6 +42,46 @@ function rgbToHex(r: number, g: number, b: number): string {
   );
 }
 
+/** Synonyms mapping shop color vocabulary onto our named palette. */
+const COLOR_SYNONYMS: Array<{ pattern: RegExp; name: string }> = [
+  { pattern: /\bnavy\b|dark blue|midnight/, name: "navy" },
+  { pattern: /\bburgundy\b|maroon|\bwine\b|bordeaux/, name: "burgundy" },
+  { pattern: /off[- ]?white|ivory|ecru/, name: "cream" },
+  { pattern: /\bcream\b/, name: "cream" },
+  { pattern: /\bkhaki\b|\bolive\b|army green/, name: "olive" },
+  { pattern: /\btan\b|\bcamel\b|\bsand\b|natural/, name: "beige" },
+  { pattern: /\bbeige\b/, name: "beige" },
+  { pattern: /charcoal|gr[ae]y/, name: "grey" },
+  { pattern: /\bteal\b|turquoise|petrol/, name: "teal" },
+  { pattern: /\bblack\b/, name: "black" },
+  { pattern: /\bwhite\b/, name: "white" },
+  { pattern: /\bred\b|scarlet/, name: "red" },
+  { pattern: /\borange\b|\brust\b/, name: "orange" },
+  { pattern: /\byellow\b|mustard/, name: "yellow" },
+  { pattern: /\bgreen\b/, name: "green" },
+  { pattern: /\bblue\b|cobalt|azure/, name: "blue" },
+  { pattern: /\bpurple\b|violet|lilac|lavender/, name: "purple" },
+  { pattern: /\bpink\b|\brose\b|blush/, name: "pink" },
+  { pattern: /\bbrown\b|chocolate|mocha/, name: "brown" },
+];
+
+/**
+ * Find a named color mentioned in free text (a shop's color field or a
+ * product title). Returns our palette name + representative hex, or null.
+ */
+export function colorFromText(
+  text: string
+): { name: string; hex: string } | null {
+  const t = text.toLowerCase();
+  for (const s of COLOR_SYNONYMS) {
+    if (s.pattern.test(t)) {
+      const named = NAMED_COLORS.find((c) => c.name === s.name);
+      if (named) return { name: named.name, hex: rgbToHex(...named.rgb) };
+    }
+  }
+  return null;
+}
+
 export function nearestColorName(hex: string): string {
   const r = parseInt(hex.slice(1, 3), 16);
   const g = parseInt(hex.slice(3, 5), 16);
@@ -74,26 +114,57 @@ export async function extractDominantColors(
   bitmap.close();
 
   const { data } = ctx.getImageData(0, 0, size, size);
-  const buckets = new Map<string, { r: number; g: number; b: number; n: number }>();
 
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const i = (y * size + x) * 4;
-      const [r, g, b, a] = [data[i], data[i + 1], data[i + 2], data[i + 3]];
-      if (a < 128) continue;
-      // Skip near-white pixels near the border (product-shot background).
-      const nearEdge = x < 6 || y < 6 || x >= size - 6 || y >= size - 6;
-      const isNearWhite = r > 235 && g > 235 && b > 235;
-      if (nearEdge && isNearWhite) continue;
-      const key = `${r >> 5}-${g >> 5}-${b >> 5}`;
-      const bucket = buckets.get(key) ?? { r: 0, g: 0, b: 0, n: 0 };
-      bucket.r += r;
-      bucket.g += g;
-      bucket.b += b;
-      bucket.n += 1;
-      buckets.set(key, bucket);
-    }
+  const px = (x: number, y: number) => {
+    const i = (y * size + x) * 4;
+    return [data[i], data[i + 1], data[i + 2], data[i + 3]] as const;
+  };
+
+  // Product shots have a uniform studio background (white, light grey, …).
+  // Sample the four corners and suppress background-like pixels anywhere
+  // in the frame so the garment dominates the histogram.
+  const cornerSamples: Array<readonly [number, number, number, number]> = [];
+  for (const [cx, cy] of [
+    [2, 2],
+    [size - 3, 2],
+    [2, size - 3],
+    [size - 3, size - 3],
+  ] as const) {
+    cornerSamples.push(px(cx, cy));
   }
+  const isBackground = (r: number, g: number, b: number) =>
+    cornerSamples.some(([cr, cg, cb, ca]) => {
+      if (ca < 128) return false;
+      return (r - cr) ** 2 + (g - cg) ** 2 + (b - cb) ** 2 < 900; // ~30 per channel
+    });
+
+  const collect = (skipBackground: boolean) => {
+    const buckets = new Map<
+      string,
+      { r: number; g: number; b: number; n: number }
+    >();
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const [r, g, b, a] = px(x, y);
+        if (a < 128) continue;
+        if (skipBackground && isBackground(r, g, b)) continue;
+        const key = `${r >> 5}-${g >> 5}-${b >> 5}`;
+        const bucket = buckets.get(key) ?? { r: 0, g: 0, b: 0, n: 0 };
+        bucket.r += r;
+        bucket.g += g;
+        bucket.b += b;
+        bucket.n += 1;
+        buckets.set(key, bucket);
+      }
+    }
+    return buckets;
+  };
+
+  let buckets = collect(true);
+  const kept = [...buckets.values()].reduce((acc, b) => acc + b.n, 0);
+  // If suppression removed almost everything (e.g. a white shirt on a white
+  // background), fall back to the full histogram.
+  if (kept < size * size * 0.05) buckets = collect(false);
 
   const sorted = [...buckets.values()].sort((a, b) => b.n - a.n);
   if (sorted.length === 0) return ["#888888"];

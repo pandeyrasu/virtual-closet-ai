@@ -8,9 +8,17 @@ import {
   warmUpClassifier,
   type ClassifierStatus,
 } from "@/lib/classifier";
-import { extractDominantColors, nearestColorName } from "@/lib/colors";
+import {
+  colorFromText,
+  extractDominantColors,
+  nearestColorName,
+} from "@/lib/colors";
 import { newId, saveItem } from "@/lib/db";
-import { TAXONOMY, subcategoryInfo } from "@/lib/taxonomy";
+import {
+  matchTaxonomyFromText,
+  TAXONOMY,
+  subcategoryInfo,
+} from "@/lib/taxonomy";
 import type { ClothingItem } from "@/lib/types";
 import { useBlobUrl } from "@/lib/useBlobUrl";
 import { ProductLinkImport } from "./ProductLinkImport";
@@ -20,6 +28,12 @@ interface PendingItem {
   file: File;
   /** product title from a link import; overrides the auto-generated name */
   nameOverride?: string | null;
+  /** color as declared by the shop (link imports) */
+  colorHint?: string | null;
+  /** fabric composition from the shop page (link imports) */
+  material?: string | null;
+  /** how the category was decided, for the review caption */
+  source?: "ai" | "title";
   status: "queued" | "classifying" | "review" | "saved" | "error";
   draft?: ClothingItem;
   error?: string;
@@ -97,9 +111,12 @@ function DraftRow({
             </div>
             <div className="flex items-center justify-between gap-2">
               <p className="text-xs text-ink/50">
-                {draft.confidence > 0
-                  ? `AI guess · ${Math.round(draft.confidence * 100)}% confident · ${draft.colorName}`
-                  : `manually set · ${draft.colorName}`}
+                {pending.source === "title"
+                  ? `from product title · ${draft.colorName}`
+                  : draft.confidence > 0
+                    ? `AI guess · ${Math.round(draft.confidence * 100)}% confident · ${draft.colorName}`
+                    : `manually set · ${draft.colorName}`}
+                {draft.material ? ` · ${draft.material}` : ""}
               </p>
               <button className="btn-primary" onClick={onSave}>
                 Add to closet
@@ -137,25 +154,45 @@ export function UploadItems({ onSaved }: { onSaved: () => void }) {
     processing.current = true;
     for (const p of queue) {
       update(p.tempId, { status: "classifying" });
-      let colors = ["#888888"];
+      let pixelColors = ["#888888"];
       try {
-        colors = await extractDominantColors(p.file);
+        pixelColors = await extractDominantColors(p.file);
       } catch {
         // keep fallback color
       }
-      const colorName = nearestColorName(colors[0]);
-      let info = TAXONOMY[0];
+
+      // Shop metadata beats pixel/AI guesses when available: the declared
+      // color field first, then color words in the product title.
+      const textColor =
+        (p.colorHint && colorFromText(p.colorHint)) ||
+        (p.nameOverride && colorFromText(p.nameOverride)) ||
+        null;
+      const colorName = textColor?.name ?? nearestColorName(pixelColors[0]);
+      const colors = textColor
+        ? [textColor.hex, ...pixelColors.filter((c) => c !== textColor.hex)]
+        : pixelColors;
+
+      // Same for the category: a product title like "Sleeveless T-Shirt"
+      // is more reliable than image classification.
+      const titleInfo = p.nameOverride
+        ? matchTaxonomyFromText(p.nameOverride)
+        : null;
+      let info = titleInfo ?? TAXONOMY[0];
       let confidence = 0;
+      let source: "ai" | "title" = titleInfo ? "title" : "ai";
       let aiFailed = false;
-      try {
-        const result = await classifyClothing(p.file);
-        info = result.info;
-        confidence = result.confidence;
-      } catch {
-        // Model unavailable (offline / download blocked): fall back to a
-        // manual draft so the item can still be categorized by hand.
-        aiFailed = true;
+      if (!titleInfo) {
+        try {
+          const result = await classifyClothing(p.file);
+          info = result.info;
+          confidence = result.confidence;
+        } catch {
+          // Model unavailable (offline / download blocked): fall back to a
+          // manual draft so the item can still be categorized by hand.
+          aiFailed = true;
+        }
       }
+
       const draft: ClothingItem = {
         id: newId(),
         name: p.nameOverride?.trim() || `${colorName} ${info.label}`,
@@ -167,6 +204,7 @@ export function UploadItems({ onSaved }: { onSaved: () => void }) {
         seasons: info.seasons,
         occasions: info.occasions,
         confidence,
+        material: p.material?.trim() || null,
         image: p.file,
         favorite: false,
         wearCount: 0,
@@ -176,6 +214,7 @@ export function UploadItems({ onSaved }: { onSaved: () => void }) {
       update(p.tempId, {
         status: "review",
         draft,
+        source,
         error: aiFailed
           ? "AI is unavailable right now — please set the category manually."
           : undefined,
@@ -184,13 +223,22 @@ export function UploadItems({ onSaved }: { onSaved: () => void }) {
     processing.current = false;
   }
 
-  function addFiles(entries: Array<{ file: File; nameOverride?: string | null }>) {
+  function addFiles(
+    entries: Array<{
+      file: File;
+      nameOverride?: string | null;
+      colorHint?: string | null;
+      material?: string | null;
+    }>
+  ) {
     const queue: PendingItem[] = entries
       .filter((e) => e.file.type.startsWith("image/"))
       .map((e) => ({
         tempId: newId(),
         file: e.file,
         nameOverride: e.nameOverride,
+        colorHint: e.colorHint,
+        material: e.material,
         status: "queued" as const,
       }));
     if (queue.length === 0) return;
@@ -245,8 +293,15 @@ export function UploadItems({ onSaved }: { onSaved: () => void }) {
         />
       </div>
       <ProductLinkImport
-        onPick={(file, suggestedName) =>
-          addFiles([{ file, nameOverride: suggestedName }])
+        onPick={(file, meta) =>
+          addFiles([
+            {
+              file,
+              nameOverride: meta.title,
+              colorHint: meta.color,
+              material: meta.material,
+            },
+          ])
         }
       />
       {pendings.map((p) => (

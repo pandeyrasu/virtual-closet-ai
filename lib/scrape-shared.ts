@@ -1,6 +1,10 @@
 export interface ScrapedProduct {
   title: string | null;
   brand: string | null;
+  /** color name as declared by the shop (JSON-LD `color`), if any */
+  color: string | null;
+  /** fabric composition, e.g. "100% cotton" or "65% polyester, 35% cotton" */
+  material: string | null;
   siteName: string | null;
   /** candidate product image URLs, best guesses first (may include dead links — the client only shows ones that load) */
   images: string[];

@@ -12,10 +12,16 @@ function proxied(url: string): string {
  * and images server-side (JSON-LD / OpenGraph / site adapters), then the
  * user picks exactly one image to import into the closet.
  */
+export interface ProductMeta {
+  title: string | null;
+  color: string | null;
+  material: string | null;
+}
+
 export function ProductLinkImport({
   onPick,
 }: {
-  onPick: (file: File, suggestedName: string | null) => void;
+  onPick: (file: File, meta: ProductMeta) => void;
 }) {
   const [link, setLink] = useState("");
   const [loading, setLoading] = useState(false);
@@ -57,7 +63,11 @@ export function ProductLinkImport({
       const blob = await res.blob();
       const ext = (blob.type.split("/")[1] ?? "jpg").replace("jpeg", "jpg");
       const file = new File([blob], `product.${ext}`, { type: blob.type });
-      onPick(file, result.title);
+      onPick(file, {
+        title: result.title,
+        color: result.color,
+        material: result.material,
+      });
       setResult(null);
       setLink("");
       setSelected(null);
@@ -107,6 +117,8 @@ export function ProductLinkImport({
               <>
                 Found <span className="font-medium">{result.title}</span>
                 {result.siteName ? ` on ${result.siteName}` : ""}
+                {result.color ? ` · ${result.color}` : ""}
+                {result.material ? ` · ${result.material}` : ""}
               </>
             ) : (
               "Pick the product image:"
